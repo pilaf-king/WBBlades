@@ -526,6 +526,9 @@
     if (typeParent > vm) {
         typeParent = typeParent - vm;
     }
+    if (typeParent > fileData.length || typeParent == 0){
+        return typeName;
+    }
     
     SwiftType parentType = {0};
     NSRange range = NSMakeRange(typeParent, 0);

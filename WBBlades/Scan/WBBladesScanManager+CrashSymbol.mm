@@ -174,12 +174,12 @@
             NSData *data = [WBBladesTool readBytes:range length:8 fromFile:fileData];
             [data getBytes:&classAddress range:NSMakeRange(0, 8)];
             unsigned long long classOffset = classAddress - vm;
-            
+
             class64 targetClass = {0};
             NSRange targetClassRange = NSMakeRange(classOffset, 0);
             data = [WBBladesTool readBytes:targetClassRange length:sizeof(class64) fromFile:fileData];
             [data getBytes:&targetClass length:sizeof(class64)];
-            
+
             class64Info targetClassInfo = {0};
             unsigned long long targetClassInfoOffset = targetClass.data - vm;
             targetClassInfoOffset = (targetClassInfoOffset / 8) * 8;
@@ -187,22 +187,22 @@
             data = [WBBladesTool readBytes:targetClassInfoRange length:sizeof(class64Info) fromFile:fileData];
             [data getBytes:&targetClassInfo length:sizeof(class64Info)];
             unsigned long long classNameOffset = [WBBladesTool getOffsetFromVmAddress:targetClassInfo.name fileData:fileData];//targetClassInfo.name - vm;
-            
+
             class64 metaClass = {0};
             NSRange metaClassRange = NSMakeRange(targetClass.isa - vm, 0);
             data = [WBBladesTool readBytes:metaClassRange length:sizeof(class64) fromFile:fileData];
             [data getBytes:&metaClass length:sizeof(class64)];
-            
+
             class64Info metaClassInfo = {0};
             unsigned long long metaClassInfoOffset = metaClass.data - vm;
             metaClassInfoOffset = (metaClassInfoOffset / 8) * 8;
             NSRange metaClassInfoRange = NSMakeRange(metaClassInfoOffset, 0);
             data = [WBBladesTool readBytes:metaClassInfoRange length:sizeof(class64Info) fromFile:fileData];
             [data getBytes:&metaClassInfo length:sizeof(class64Info)];
-            
+
             unsigned long long methodListOffset = targetClassInfo.baseMethods - vm;
             unsigned long long classMethodListOffset = metaClassInfo.baseMethods - vm;
-            
+
             //类名最大50字节
             uint8_t * buffer = (uint8_t *)malloc(CLASSNAME_MAX_LEN + 1); buffer[CLASSNAME_MAX_LEN] = '\0';
             [fileData getBytes:buffer range:NSMakeRange(classNameOffset, CLASSNAME_MAX_LEN)];
@@ -237,19 +237,19 @@
            NSData *data = [WBBladesTool readBytes:range length:8 fromFile:fileData];
            [data getBytes:&catAddress range:NSMakeRange(0, 8)];
            unsigned long long catOffset = catAddress - vm;
-           
+
            category64 targetCategory = {0};
            NSRange targetCategoryRange = NSMakeRange(catOffset, 0);
            data = [WBBladesTool readBytes:targetCategoryRange length:sizeof(category64) fromFile:fileData];
            [data getBytes:&targetCategory length:sizeof(category64)];
-           
+
            unsigned long long categoryNameOffset = [WBBladesTool getOffsetFromVmAddress:targetCategory.name fileData:fileData];//targetCategory.name - vm;
-           
+
            //category name 50 bytes maximum
            uint8_t *buffer = (uint8_t *)malloc(CLASSNAME_MAX_LEN + 1); buffer[CLASSNAME_MAX_LEN] = '\0';
            [fileData getBytes:buffer range:NSMakeRange(categoryNameOffset, CLASSNAME_MAX_LEN)];
            NSString *catName = NSSTRING(buffer);
-           
+
            //dylib class category
            NSString *className = @"";
            if (targetCategory.cls == 0) {
@@ -260,7 +260,7 @@
            }else{
                class64 targetClass;
                [fileData getBytes:&targetClass range:NSMakeRange(targetCategory.cls - vm,sizeof(class64))];
-               
+
                class64Info targetClassInfo = {0};
                unsigned long long targetClassInfoOffset = targetClass.data - vm;
                targetClassInfoOffset = (targetClassInfoOffset / 8) * 8;
@@ -268,7 +268,7 @@
                data = [WBBladesTool readBytes:targetClassInfoRange length:sizeof(class64Info) fromFile:fileData];
                [data getBytes:&targetClassInfo length:sizeof(class64Info)];
                unsigned long long classNameOffset = [WBBladesTool getOffsetFromVmAddress:targetClassInfo.name fileData:fileData];//targetClassInfo.name - vm;
-               
+
                //class name 50 bytes maximum
                buffer[CLASSNAME_MAX_LEN] = '\0';
                [fileData getBytes:buffer range:NSMakeRange(classNameOffset, CLASSNAME_MAX_LEN)];
@@ -475,6 +475,7 @@
     }
     return crashSymbolRst.copy;
 }
+
 + (NSDictionary *)scanSwiftClassMethodSymbol:(uintptr_t)typeOffset swiftType:(SwiftType)swiftType vm:(uintptr_t)vm fileData:(NSData *)fileData crashAddress:(NSArray *)crashAddress{
     NSMutableDictionary *crashSymbolRst = [NSMutableDictionary dictionary];
     
@@ -494,13 +495,21 @@
     NSInteger memCount = fieldDes.NumFields;//先获取属性有几个
     uintptr_t memberOffset = fieldOffset + 4*4;
     
-    uintptr_t methodLocation = typeOffset + sizeof(SwiftClassType);
+//    uintptr_t methodLocation = typeOffset + sizeof(SwiftClassType);
     UInt32 methodNum = classType.NumMethods;
+    BOOL hasSingletonMetadataInitialization = [WBBladesTool hasSingletonMetadataInitialization:swiftType];
+    
+    short genericSize = [WBBladesTool addPlaceholderWithGeneric:typeOffset fileData:fileData];
+    uintptr_t methodLocation = typeOffset + sizeof(SwiftClassTypeNoMethods) + 8 + (hasSingletonMetadataInitialization?12:0) + genericSize;
+    range = NSMakeRange(methodLocation, 4);
+    [fileData getBytes:&methodNum range:range];
+    methodLocation += 4;
+    
     NSMutableArray *methodArray = [NSMutableArray array];
     FieldRecord record = {0};
     NSInteger memSqu = 0;
 
-    if ((swiftType.Flag&0x80000000) == 0x80000000) {//有VTable
+    if ([WBBladesTool hasVTable:swiftType]) {//有VTable
         for (int j = 0; j < methodNum; j++) {
             [methodArray addObject:@(methodLocation)];
             SwiftMethod method = {0};
@@ -519,7 +528,9 @@
             NSString *methodName = [self swiftClassMethod:method memberOffset:memberOffset member:record vm:vm squ:j memSqu:memSqu fileData:fileData];
             uintptr_t imp = methodLocation + 4 + method.Offset;
             NSLog(@"%@.%@",className,methodName);
-                
+            if (imp < vm) {
+                imp += vm;
+            }
             [crashAddress enumerateObjectsUsingBlock:^(id  _Nonnull obj, NSUInteger idx, BOOL * _Nonnull stop) {
                 unsigned long long crash = [(NSString *)obj longLongValue];
                 if ([self scanFuncBinaryCode:crash begin:imp vm:vm fileData:fileData]) {
@@ -534,8 +545,8 @@
         }
     }
     
-    if((swiftType.Flag&0x40000000) == 0x40000000) {//有OverrideTable
-        if ((swiftType.Flag&0x80000000) != 0x80000000) {//没有VTable
+    if([WBBladesTool hasOverrideTable:swiftType]) {//有OverrideTable
+        if (![WBBladesTool hasVTable:swiftType] && ![WBBladesTool hasSingletonMetadataInitialization:swiftType]) {//没有VTable&&Meta
             methodLocation = typeOffset + sizeof(SwiftClassTypeNoMethods) + 4;
         }
         NSDictionary *overrideRst = [self scanSwiftClassOverrideMethodSymbol:methodLocation
@@ -568,14 +579,20 @@
         data = [WBBladesTool readBytes:range length:sizeof(SwiftOverrideMethod) fromFile:fileData];
         [data getBytes:&method length:sizeof(SwiftOverrideMethod)];
         
-        uintptr_t overrideMethodOffset = methodLocation + 4 + method.OverrideMethod - vm;
+        uintptr_t overrideMethodOffset = methodLocation + 4 + method.OverrideMethod;
+        if(overrideMethodOffset > vm){
+            overrideMethodOffset = overrideMethodOffset - vm;
+        }
         
         SwiftMethod overrideMethod = {0};
         range = NSMakeRange(overrideMethodOffset, 0);
         data = [WBBladesTool readBytes:range length:sizeof(SwiftMethod) fromFile:fileData];
         [data getBytes:&overrideMethod length:sizeof(SwiftMethod)];
 
-        uintptr_t overrideClassOffset = methodLocation + method.OverrideClass - vm;
+        uintptr_t overrideClassOffset = methodLocation + method.OverrideClass;
+        if (overrideClassOffset > vm) {
+            overrideClassOffset = overrideClassOffset - vm;
+        }
             
         SwiftType classType = {0};
         range = NSMakeRange(overrideClassOffset, 0);
@@ -587,6 +604,9 @@
         NSString *methodName = [self swiftClassMethod:overrideMethod memberOffset:overrideMethodOffset member:{0} vm:vm squ:0 memSqu:0 fileData:fileData];
         uintptr_t imp = methodLocation + 4*2 + method.Method;//函数地址
         NSLog(@"%@重写%@.%@",className,overrideClassName,methodName);
+        if (imp < vm) {
+            imp += vm;
+        }
         [crashAddress enumerateObjectsUsingBlock:^(id  _Nonnull obj, NSUInteger idx, BOOL * _Nonnull stop) {
             unsigned long long crash = [(NSString *)obj longLongValue];
             if ([self scanFuncBinaryCode:crash begin:imp vm:vm fileData:fileData]) {
@@ -611,7 +631,10 @@
     NSString *methodName = @"";
     NSString *memName = @"";
     if (member.FieldName > 0 && (kind == SwiftMethodKindGetter || kind == SwiftMethodKindSetter || kind == SwiftMethodKindModify)) {
-        uintptr_t memNameOffset = memberOffset + (memSqu-1)*sizeof(FieldRecord) + 4*2 + member.FieldName - vm;
+        uintptr_t memNameOffset = memberOffset + (memSqu-1)*sizeof(FieldRecord) + 4*2 + member.FieldName;
+        if (memNameOffset > vm) {
+            memNameOffset -= vm;
+        }
         uint8_t *buffer = (uint8_t *)malloc(CLASSNAME_MAX_LEN + 1); buffer[CLASSNAME_MAX_LEN] = '\0';
         [fileData getBytes:buffer range:NSMakeRange(memNameOffset, CLASSNAME_MAX_LEN)];
         memName = NSSTRING(buffer);
